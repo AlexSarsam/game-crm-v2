@@ -1,145 +1,262 @@
 # Games CRM
 
-Una plataforma de juegos construida con Laravel donde los jugadores se identifican con su cara, juegan y chatean en tiempo real. Por dentro es un CRM que gestiona usuarios, roles, juegos, sesiones, emociones y mensajes.
+Plataforma de juegos hecha con Laravel 12. Por fuera es una web donde los jugadores acceden a juegos, juegan, guardan sus resultados y hablan por chat en tiempo real. Por dentro funciona como un CRM que gestiona usuarios, roles, juegos, sesiones, emociones y verificación facial.
 
-La idea del proyecto es aprender a diseñar un sistema donde cada pieza tiene una responsabilidad clara: Laravel como núcleo, un microservicio Python para el reconocimiento facial, el juego como cliente independiente y WebSockets para la comunicación en tiempo real.
+Es el proyecto final del módulo **0613 – Desarrollo Web en Entorno Servidor**.
 
----
+## Qué hace la aplicación
 
-## Arquitectura del sistema
+- Los usuarios se registran e inician sesión con contraseña.
+- Antes de jugar, cada jugador registra una foto suya y la app verifica su cara con la webcam.
+- Mientras juega, la cámara detecta sus emociones (contento, triste, enfadado...) y las guarda.
+- Los jugadores del mismo juego pueden chatear entre ellos en tiempo real.
+- Los administradores y gestores crean, editan y publican juegos desde un panel.
 
-El sistema está dividido en cuatro piezas que se comunican entre sí:
+## Stack técnico
 
-**Laravel (núcleo)** — gestiona usuarios, roles, autenticación, la API y toda la lógica de seguridad. Nunca compara caras directamente, pero sí decide si el acceso se concede o no según la respuesta que recibe del microservicio.
+| Tecnología | Para qué sirve |
+|---|---|
+| Laravel 12 + PHP 8.2 | Backend, API REST, autenticación, permisos |
+| Inertia.js + React | Interfaz del CRM sin SPA aparte |
+| PostgreSQL 16 | Base de datos relacional |
+| Laravel Sanctum | Protección de la API con cookies |
+| Laravel Reverb | Servidor WebSocket oficial de Laravel |
+| Laravel Echo + pusher-js | Cliente WebSocket del navegador |
+| Python + Flask + DeepFace | Microservicio de reconocimiento facial |
+| face-api.js | Detección de emociones en el navegador |
+| Docker Compose | Aísla la base de datos y el microservicio Python |
+| Three.js | Motor del juego cliente (Runner 3D) |
 
-**Microservicio Python en Docker** — recibe dos imágenes, las compara usando DeepFace y devuelve un resultado técnico. No conoce usuarios ni sesiones. Solo compara rostros.
+## Arquitectura
 
-**Juego cliente (Runner 3D)** — aplicación independiente en Three.js embebida en un iframe. Se comunica con Laravel exclusivamente a través de la API. No accede directamente a la base de datos.
+```text
+                     +----------------------+
+                     |       Navegador      |
+                     |----------------------|
+                     |  Inertia + React     |
+                     |  Runner 3D (iframe)  |
+                     |  face-api.js         |
+                     +----------+-----------+
+                                |
+                  HTTP / cookies | WebSocket privado
+                                |
+                                v
++-----------------------------------------------------------+
+|                        Laravel 12                         |
+|-----------------------------------------------------------|
+|  Auth + sesiones | Roles + permisos | Rutas web + API     |
+|  CRUD de juegos  | Verificación facial | Broadcasting     |
++------------------------+-----------------+----------------+
+                         |                 |
+                    SQL  |                 | HTTP interno
+                         v                 v
+                 +---------------+    +----------------------+
+                 | PostgreSQL 16 |    | face-service (Python)|
+                 |---------------|    |----------------------|
+                 | users         |    | Flask + DeepFace     |
+                 | roles         |    | /health              |
+                 | games         |    | /compare             |
+                 | game_sessions |    +----------------------+
+                 | emotion_events|
+                 | chat_messages |
+                 +---------------+
+```
 
-**Chat en tiempo real** — Laravel Reverb gestiona los WebSockets. El acceso a cada canal está protegido por la sesión autenticada de Laravel, igual que cualquier otra ruta.
-
-La separación entre `routes/web.php` (vistas y navegación) y `routes/api.php` (servicios consumidos por el juego y el chat) es central en el diseño.
-
----
-
-## ¿Qué hace cada rol?
+## Roles
 
 | Rol | Puede hacer |
 |---|---|
-| **Admin** | Gestionar juegos, ver y editar usuarios, cambiar roles |
-| **Gestor** | Crear, editar, publicar y despublicar juegos |
-| **Jugador** | Ver juegos publicados, pasar verificación facial, jugar, chatear |
+| `admin` | Gestionar usuarios, cambiar roles y también los juegos |
+| `gestor` | Crear, editar, publicar y despublicar juegos |
+| `jugador` | Jugar, registrar su cara, verificarse, chatear y ver sus resultados |
 
----
+Los permisos se validan siempre en el backend. Aunque un usuario conozca una URL, si no tiene el rol correcto no entra.
 
-## Flujo de una partida
+## Principios que sigue el proyecto
 
-1. El jugador inicia sesión con su cuenta.
-2. Si no tiene foto registrada, va a **Registro Facial** y se hace una foto con la cámara. Laravel la guarda sin procesarla.
-3. Antes de entrar al juego, pasa por **Verificación Facial** — Laravel envía la foto guardada y la captura actual al microservicio Python. Si coinciden, guarda en sesión que la verificación fue correcta.
-4. Si la verificación es reciente y válida, puede acceder al juego.
-5. Al entrar, el navegador crea una sesión de juego vía API.
-6. Mientras juega, la cámara detecta emociones localmente con `face-api.js`. No se mandan fotos al servidor — solo el nombre de la emoción, la confianza y el momento.
-7. El chat del juego está abierto en tiempo real. Solo pueden entrar jugadores autenticados con verificación facial reciente.
-8. Al terminar, el jugador guarda su puntuación y la sesión queda registrada.
+1. **Laravel es la única autoridad de seguridad.** El microservicio Python no abre sesiones ni decide nada.
+2. **El navegador nunca habla directamente con Python.** Siempre pasa por Laravel.
+3. **Las emociones se procesan en el navegador.** Al servidor solo llegan datos abstractos (`happy`, `0.93`, `timestamp`). No se envían imágenes ni vídeo.
+4. **Web, API y tiempo real están separados** en `web.php`, `api.php` y `channels.php`.
+5. **El chat es por juego, no global.** Cada juego tiene su propio canal privado.
 
----
+## Flujos principales
 
-## Decisiones de diseño importantes
+### Enrolamiento facial
 
-**El reconocimiento facial no está en Laravel.** Las librerías de visión artificial tienen dependencias que no encajan en el ciclo de una petición web. Por eso vive en un microservicio Python separado, dentro de Docker.
+1. El usuario autenticado entra en `/face/enroll`.
+2. La cámara captura una foto.
+3. Laravel la guarda y la asocia al usuario.
 
-**El navegador nunca habla directamente con el microservicio.** Todo pasa por Laravel, que es quien toma la decisión de acceso.
+Python no interviene en este paso.
 
-**Las emociones se detectan en el cliente, no en el servidor.** `face-api.js` analiza la webcam localmente y solo manda datos abstractos (nombre de emoción + confianza). No se envían imágenes.
+### Verificación facial
 
-**Los mensajes del chat se guardan en base de datos.** Están asociados a un juego concreto, no son efímeros, para poder consultarlos después.
+1. El usuario abre `/face/verify`.
+2. La webcam captura una imagen actual.
+3. Laravel manda la foto registrada + la actual al microservicio Python.
+4. Python las compara con DeepFace y devuelve solo datos técnicos.
+5. **Laravel decide** si la verificación es válida.
+6. Si lo es, marca la sesión como verificada durante un tiempo limitado.
 
-**La seguridad del chat también está en el servidor.** El canal WebSocket valida que el usuario sea jugador, que el juego esté publicado y que tenga una verificación facial reciente.
+### Partida de un jugador
 
----
+1. El jugador entra en `/play/{game}`.
+2. El middleware `face.verified` bloquea la ruta si ya no es válida.
+3. El frontend llama a `POST /api/games/{game}/sessions` y recibe un `session_id`.
+4. Durante la partida, face-api.js detecta emociones cada pocos segundos y las manda a la API.
+5. Al terminar, el jugador introduce su puntuación y se cierra la sesión con `PATCH`.
 
-## API disponible
+### Chat en tiempo real
+
+1. Al abrir el juego, el frontend se conecta al canal privado `game.{id}` con Echo.
+2. Laravel autoriza el canal en `routes/channels.php`.
+3. Cuando alguien envía un mensaje, se guarda en `chat_messages` y se dispara el evento `MessageSent`.
+4. Reverb lo reenvía a todos los conectados al mismo juego.
+5. El chat aparece en pantalla sin recargar nada.
+
+## API
 
 ### Pública
 
-- `GET /api/games` — lista de juegos publicados
+| Método | Ruta | Descripción |
+|---|---|---|
+| `GET` | `/api/games` | Lista los juegos publicados |
 
-### Protegida (requiere sesión autenticada)
+### Protegida (auth:sanctum)
 
-- `POST /api/games/{game}/sessions` — inicia una sesión de juego
-- `PATCH /api/games/{game}/sessions/{session}` — cierra la sesión y guarda la puntuación
-- `POST /api/games/{game}/sessions/{session}/emotions` — registra un evento emocional
-- `GET /api/games/{game}/messages` — historial reciente del chat
-- `POST /api/games/{game}/messages` — envía un mensaje al chat
+| Método | Ruta | Descripción |
+|---|---|---|
+| `POST` | `/api/games/{game}/sessions` | Inicia una sesión de juego |
+| `PATCH` | `/api/games/{game}/sessions/{session}` | Guarda puntuación y cierra la sesión |
+| `POST` | `/api/games/{game}/sessions/{session}/emotions` | Registra una emoción detectada |
+| `GET` | `/api/games/{game}/messages` | Historial del chat del juego |
+| `POST` | `/api/games/{game}/messages` | Envía un mensaje al chat |
 
----
+## Base de datos
 
-## Tecnologías utilizadas
-
-| Tecnología | Para qué se usa |
+| Tabla | Qué guarda |
 |---|---|
-| Laravel 12 + PHP 8.2 | Núcleo del sistema: autenticación, API, lógica y seguridad |
-| PostgreSQL 16 | Base de datos relacional |
-| Laravel Sanctum | Autenticación de la API con cookies de sesión |
-| Inertia.js + React 18 | Interfaz del CRM (sin recargar la página) |
-| Tailwind CSS | Estilos |
-| Laravel Reverb | Servidor WebSockets para el chat en tiempo real |
-| Laravel Echo + Pusher.js | Cliente WebSocket en el navegador |
-| Python + Flask + DeepFace | Microservicio de reconocimiento facial |
-| Docker Compose | Orquestación del microservicio y la base de datos |
-| Three.js + Vue 3 | Juego Runner 3D (cliente independiente) |
-| face-api.js | Detección de emociones en el navegador |
+| `roles` | Catálogo de roles |
+| `users` | Usuarios del sistema (incluye `role_id` y `face_image_path`) |
+| `games` | Juegos del CRM con estado publicado/no publicado |
+| `game_sessions` | Partidas iniciadas por jugadores |
+| `emotion_events` | Emociones detectadas durante cada sesión |
+| `chat_messages` | Mensajes del chat por juego y autor |
 
----
+## Microservicio facial (Python)
 
-## Cómo arrancarlo
+Vive en `face-service/` y su única responsabilidad es comparar dos imágenes.
+
+| Método | Ruta | Para qué |
+|---|---|---|
+| `GET` | `/health` | Comprobar que está vivo |
+| `POST` | `/compare` | Comparar dos imágenes en base64 |
+
+No sabe nada de usuarios, sesiones ni permisos. Solo compara rostros y devuelve resultados.
+
+## Cómo arrancarlo en local
 
 ### Requisitos
 
-- PHP 8.2 o superior
+- PHP 8.2+
 - Composer
 - Node.js
 - Docker Desktop
 
-### Pasos
+### Primera vez
 
 ```bash
 composer install
+npm install
 cp .env.example .env
 php artisan key:generate
-
 docker compose up -d
 php artisan migrate --seed
+```
 
-npm install
+### Arrancar el proyecto
+
+```bash
 composer dev
 ```
 
-`composer dev` arranca Laravel, Vite, Reverb y la cola de trabajos todo a la vez.
+Esto levanta a la vez:
 
-Si prefieres hacerlo por separado:
+- Laravel (`http://localhost:8000`)
+- Reverb (`ws://localhost:8080`)
+- Vite (hot reload de React)
+- Cola de trabajos
+- Pail (logs en vivo)
+
+Docker debe estar corriendo antes (PostgreSQL y `face-service`).
+
+### Servicios esperados
+
+| Servicio | URL |
+|---|---|
+| Laravel | `http://localhost:8000` |
+| Reverb | `ws://localhost:8080` |
+| PostgreSQL | `localhost:5433` |
+| face-service | `http://localhost:5001` |
+
+Para comprobar que Python funciona:
 
 ```bash
-php artisan serve
-php artisan reverb:start
-php artisan queue:work
-npm run dev
+curl http://localhost:5001/health
 ```
 
-### Usuarios de prueba
+## Usuarios de prueba
 
-| Email | Contraseña | Rol |
-|---|---|---|
-| admin@example.com | password | Admin |
-| gestor@example.com | password | Gestor |
-| jugador@example.com | password | Jugador |
+Todos tienen contraseña `password`.
 
----
+| Email | Rol |
+|---|---|
+| `admin@example.com` | admin |
+| `gestor@example.com` | gestor |
+| `jugador@example.com` | jugador |
 
-## Notas
+## Despliegue
 
-- La **primera verificación facial** puede tardar un par de minutos porque DeepFace descarga los modelos al arrancar por primera vez.
-- La **verificación facial caduca** pasado un tiempo. Si lleva mucho tiempo sin verificarse, el sistema le pedirá que repita el proceso antes de entrar al juego.
-- El **chat es por juego**, no global. Solo ven los mensajes quienes tienen acceso a ese juego.
-- El campo URL de los juegos acepta rutas internas (`/Runner3D/dist/index.html`) y URLs externas, lo que permite alojar los juegos en otro servidor sin cambiar el backend.
+Cada pieza se despliega según su naturaleza:
+
+- **Laravel** → servidor Linux con PHP, Nginx/Apache y PostgreSQL.
+- **Microservicio Python** → contenedor Docker, idealmente en red interna.
+- **Juegos cliente** → pueden servirse como estáticos en Vercel, Netlify o Cloudflare. Laravel solo guarda la URL.
+
+Esta separación es parte del diseño y del criterio RA7.
+
+## Variables de entorno importantes
+
+| Variable | Valor típico |
+|---|---|
+| `DB_CONNECTION` | `pgsql` |
+| `DB_PORT` | `5433` |
+| `FACE_SERVICE_URL` | `http://localhost:5001` |
+| `FACE_VERIFICATION_TTL` | `30` |
+| `BROADCAST_CONNECTION` | `reverb` |
+| `QUEUE_CONNECTION` | `database` |
+
+## Decisiones de diseño
+
+- La verificación facial **refuerza** el login, no lo reemplaza.
+- Laravel **guarda** la imagen pero no la analiza.
+- Python **compara** pero no decide.
+- Las emociones se guardan por sesión, no como perfil biométrico.
+- El chat es contextual por juego y usa canal privado.
+- Los juegos son clientes externos de la API, como podría serlo una app móvil.
+
+## Relación con RA6 y RA7
+
+**RA6** — servicios web reutilizables:
+- diseño claro de la API
+- separación real entre `web.php` y `api.php`
+- consumo desde clientes distintos
+- integración de un servicio externo (Python)
+- validación y seguridad centralizadas
+
+**RA7** — publicación y consumo en entorno real:
+- Laravel preparado para desplegarse fuera de local
+- juegos servibles como estáticos
+- microservicio facial ya en Docker
+- la API se consume tanto desde el navegador como desde juegos cliente

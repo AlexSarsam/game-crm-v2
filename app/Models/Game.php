@@ -32,4 +32,9 @@ class Game extends Model
     {
         return $this->hasMany(GameSession::class);
     }
+
+    public function chatMessages(): HasMany
+    {
+        return $this->hasMany(ChatMessage::class);
+    }
 }

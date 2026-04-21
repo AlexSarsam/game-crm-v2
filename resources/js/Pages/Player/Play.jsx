@@ -211,15 +211,25 @@ export default function PlayerPlay({ game }) {
                         {game.title}
                     </h2>
                     {currentEmotion && (
-                        <span className="rounded-full bg-indigo-100 px-3 py-0.5 text-xs text-indigo-700 capitalize">
-                            {currentEmotion}
+                        <span className="rounded-full bg-indigo-100 px-3 py-1 text-sm text-indigo-700 capitalize">
+                            {emotionEmoji(currentEmotion)} {currentEmotion}
                         </span>
                     )}
                 </div>
             }
         >
             <Head title={game.title} />
-            <video ref={videoRef} className="hidden" muted playsInline />
+            <video
+                ref={videoRef}
+                className="fixed bottom-4 right-4 z-50 h-36 w-48 rounded-lg border-2 border-indigo-500 shadow-lg"
+                muted
+                playsInline
+            />
+            {currentEmotion && (
+                <div className="fixed bottom-44 right-4 z-50 rounded-full bg-white px-3 py-1 text-2xl shadow-lg">
+                    {emotionEmoji(currentEmotion)}
+                </div>
+            )}
 
             <div className="p-4">
                 <div className="flex gap-4">
@@ -382,4 +392,18 @@ function getCookie(name) {
 
 function topEmotion(expressions) {
     return Object.entries(expressions).sort((a, b) => b[1] - a[1])[0];
+}
+
+function emotionEmoji(emotion) {
+    const emojis = {
+        happy: '😊',
+        sad: '😢',
+        angry: '😠',
+        surprised: '😲',
+        neutral: '😐',
+        disgusted: '🤢',
+        fearful: '😨',
+    };
+
+    return emojis[emotion] ?? '🙂';
 }
